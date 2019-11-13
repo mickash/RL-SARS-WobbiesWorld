@@ -1,0 +1,229 @@
+#' Decides the best course of action for wobbie, given an existing controller and maze
+#' @param controller the controller object containing information on how to control wobbie
+#' @param maze the maze containing the current world-state
+#' @returns a list with move=the_move and controller=the_updated_controller_after_deciding
+myDecideAction <- function(controller, maze) {
+  saIndices <- controller$sEncoder(maze$wobbie[1], maze$wobbie[2], maze$monster1[1], maze$monster1[2])
+  qEntries <- controller$qTable[saIndices,]
+  # Use exploration function (see function doc for exploration) to control explore vs exploit
+  if(controller$doRand) {
+    qEntries <- exploration(qEntries)
+  } else {
+    # print("Switched to testing!")
+  }
+  
+  maxUtility <- which(qEntries[, "q"] == max(qEntries[, "q"], na.rm = T))
+  if(length(maxUtility) > 1) {
+    maxUtility <- sample(maxUtility, size=1)
+  }
+  controller$lastSA <- saIndices[maxUtility]
+  sa <- controller$saDecoder(saIndices[maxUtility])
+
+  return(list(
+    move=sa$action,
+    controller=controller
+    ))
+}
+
+#' Gets called after the world has reacted to the action taken in myDecideAction
+#' @param controller the controller object returned by myDecideAction
+#' @param maze the world after taking the action given by myDecideAction
+#' @returns the controller after having being updated with information given in maze
+myUpdate <- function(controller, maze) {
+  #SA's for reached state
+  saIndices <- controller$sEncoder(maze$wobbie[1], maze$wobbie[2], maze$monster1[1], maze$monster1[2])
+  qEntries <- controller$qTable[saIndices,]
+  maxQ <- max(qEntries[, "q"], na.rm=T)
+  
+  if(!maze$alive) {
+    #Increase the significance of deaths
+    maze$reward <- maze$reward * 10
+  }
+  
+  qLastSA <- controller$qTable[controller$lastSA, "q"]
+  frequencyLastSA <- controller$qTable[controller$lastSA, "frequency"] + 1
+  qHatLastSA = maze$reward + controller$discountFactor * maxQ
+  controller$qTable[controller$lastSA, c("q", "frequency")] <- c(
+    qLastSA + learningRate(frequencyLastSA) * (qHatLastSA - qLastSA),
+    frequencyLastSA
+  )
+  return(controller)
+}
+
+#' Returns learning rate to be applied to update a particular q-entry. Russel & Norvig 
+#' (AI: A Modern Approach 3rd Global Edt, p. 725, 837 suggest a learning rate O(1/t))
+#' @param frequency frequency of the entry to compute learning rate for
+#' @return learning rate for a single update of a entry in qTable
+learningRate <- function(frequency) {
+  initial <- 0.1
+  # Alpha controls the training rate decay, Higher alpha -> slower decay
+  alpha <- 20
+  return (initial*alpha/(alpha + frequency - 1))
+}
+
+#' Exploration function as proposed by Russel & Norvig (AI: A Modern Approach 3rd Global Edt, p. 842)
+#' Transforms q table entries as to give states with little exploration a higher reward to promote
+#' early exploration over exploitation
+#' @param qEntries one or more rows from the qTable data frame to be transformed 
+#' @return qEntries-table with the reward-column transformed according to some schedule
+exploration <- function(qEntries) {
+  n_explorations <- 10
+  optimistic_reward <- 2500
+  qEntries[qEntries[,"frequency"] < n_explorations, "q"] <- optimistic_reward
+  return (qEntries)
+}
+
+#' Creates a controller to be used with wobbies world
+#' @param maze that the controller will be used in
+#' @return controller iaw specification given in docs for runWW and runGame
+myMakeController <- function(maze) {
+  saDecoder <- makeSADecoder(maze)
+  qTable <- matrix(nrow=lengthOfSAVector(maze), ncol = 2, dimnames=list(list(), list("q", "frequency")))
+
+  # Due to my 1-d implementation of the state-action space, qTable will contain some (about 50%)
+  # state-actions that don't exist, we'll "enable" those that do. This is indeed a bit messy,
+  # but in my original implementation with a data-frame as q-table container, row-lookups by string
+  # used about 90% of the time, so I decided to do something "drastic" about it
+  for(i in 1:nrow(qTable)) {
+    sa <- saDecoder(i)
+    # Does the position exist in the maze?
+    if(sum(maze$maze$x == sa$wobbieX & maze$maze$y == sa$wobbieY) == 1 &&
+       sum(maze$maze$x == sa$monsterX & maze$maze$y == sa$monsterY) == 1) {
+      # Is the action terminal (lose-state)?
+      if(sa$wobbieX == sa$monsterX && sa$wobbieY == sa$monsterY) {
+        # Only allow for one action in terminal state
+        if(sa$action == 5) {
+          qTable[i, c("q", "frequency")] <- c(0, 0)
+        }
+      } else if(sa$wobbieX == maze$goal[1] && sa$wobbieY == maze$goal[2]) {
+        # Terminal win state
+        if(sa$action == 5) {
+          qTable[i, c("q", "frequency")] <- c(0, 0)
+        }
+      } else {
+        # "Regular" state, is the (intended) action valid?
+        intendedX = sa$wobbieX + actionDX[sa$action]
+        intendedY = sa$wobbieY + actionDY[sa$action]
+        if(sum(maze$maze$x == intendedX & maze$maze$y == intendedY) == 1) {
+          qTable[i, c("q", "frequency")] <- c(0, 0)
+        }
+      }
+    }
+  }
+  return (list(decideAction=myDecideAction,
+              update=myUpdate,
+              qTable=qTable,
+              saDecoder=saDecoder,
+              sEncoder=makeSEncoder(maze),
+              saEncoder=makeSAEncoder(maze),
+              discountFactor=0.5,
+              learningRateF=learningRate,
+              explorationF=exploration,
+              doRand=T))
+}
+
+#Some maps between actions and their (intended) movement follow:
+numActions <- 5 #2, 4, 6, 8, 5
+# Map actions 2, 4, 6, 8, 5 into indices 0..4
+actionMap <- c(NA, # No "1"-action
+               0,  # Action 2
+               NA, # No "3"-action
+               1,  # Action 4
+               4,  # Action 5 (last)
+               2,  # Action 6
+               NA, # No "7"-action
+               3)  # Action 8
+
+actionDX <- c(NA, # No "1"-action
+              0,  # Action 2=down
+              NA, # No "3"-action
+              -1,  # Action 4=left
+              0,  # Action 5=stay
+              1,  # Action 6=right
+              NA, # No "7"-action
+              0)  # Action 8=up
+
+actionDY <- c(NA, # No "1"-action
+              -1,  # Action 2=down
+              NA, # No "3"-action
+              0,  # Action 4=left
+              0,  # Action 5=stay
+              0,  # Action 6=right
+              NA, # No "7"-action
+              1)  # Action 8=up
+
+#' @param actionIndex an index in 1..5 corresponding to the choice of action from the array [2, 4, 6, 8, 5] 
+#'                    (corresponding to: down, left, right, up, stay)
+#' @return the action [2, 4, 6, 8, 5] corresponding to actionIndex
+actionFromIndex <- function(actionIndex) {
+  if(length(actionIndex) != 1) { browser() }
+  return(switch(actionIndex, 2, 4, 6, 8, 5))
+}
+
+#' Calculates the length of the State-Action vector (including "impossible" state-actions, such as positions that are 
+#' within (minX, minY) x (maxX, maxY), but not included in the maze, and actions to such positions)
+#' @param maze the maze to calculate the state-action vector for
+#' @return length of the State-Action vector
+lengthOfSAVector <- function(maze) {
+  return(numActions * max(maze$maze$x)**2 * max(maze$maze$y)**2)
+}
+
+#' Makes an encoder from: wobbieX, wobbieY, monsterX, monsterY and action index in [2, 4, 6, 8, 5] to an index
+#' in the one-dimensional state-action vector
+#' @param maze the maze to create the encoder for
+#' @return the encoder function
+makeSAEncoder <- function(maze) {
+  maxX <- max(maze$maze$x)
+  maxY <- max(maze$maze$y)
+
+  function (wobbieX, wobbieY, monsterX, monsterY, action) {
+    actionIndex <- actionMap[action]
+    wobbieX <- wobbieX - 1
+    wobbieY <- wobbieY - 1
+    monsterX <- monsterX - 1
+    monsterY <- monsterY - 1
+    # Give one-based output
+    return(1 + actionIndex +
+      wobbieX * numActions +
+      wobbieY * numActions * maxX + 
+      monsterX * numActions * maxX * maxY +
+      monsterY * numActions * maxX * maxY * maxX
+    )
+  }  
+}
+
+#' Makes an encoder from: wobbieX, wobbieY, monsterX, monsterY to an array with all indices in the one-dimensional
+#' state-action vectors containing actions from the state.
+#' @param maze the maze to create the encoder for
+#' @return the encoder function
+makeSEncoder <- function(maze) {
+  SAEncoder <- makeSAEncoder(maze)
+  function (wobbieX, wobbieY, monsterX, monsterY) {
+    #2 is the "base-action" = index 0
+    return (0:4 + SAEncoder(wobbieX, wobbieY, monsterX, monsterY, 2))
+  }
+}
+
+#' Makes a decoder from an index in the state-action vector to an explicit state as the list:
+#' wobbieX, wobbieY, monsterX, monsterY, action
+#' @param maze the maze to create the decoder for
+#' @return the decoder function
+makeSADecoder <- function(maze) {
+  maxX <- max(maze$maze$x)
+  maxY <- max(maze$maze$y)
+  function (SAIndex) {
+    #Take one-based input
+    SAIndex <- SAIndex - 1
+    actionIndex = SAIndex %% numActions + 1
+    action = actionFromIndex(actionIndex)
+    SAIndex <- floor(SAIndex / numActions)
+    wobbieX = (SAIndex %% maxX) + 1
+    SAIndex <- floor(SAIndex / maxX)
+    wobbieY = (SAIndex %% maxY) + 1
+    SAIndex <- floor(SAIndex / maxY)
+    monsterX = (SAIndex %% maxX) + 1
+    SAIndex <- floor(SAIndex / maxX)
+    monsterY = SAIndex + 1
+    return(list(wobbieX=wobbieX, wobbieY=wobbieY, monsterX=monsterX, monsterY=monsterY, action=action))
+  }
+}

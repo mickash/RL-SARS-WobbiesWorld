@@ -1,0 +1,184 @@
+gam0 = 0.95
+#gamma = function(n=0){return(1-0.2*exp(-n*1e-6))}
+#gamma = function(n=0){return(0.5 + 0.3*(1+sin(n*2*pi/30)))}
+gamma = function(n=0){return(gam0)}
+
+lam0 = 1
+#lambda = function(n=0){return(lam0)}
+#lambda = function(n=0){return(lam0*60/(60+n))}
+lambda = function(n=0){return(lam0 * exp(-n/100))}
+#lambda = function(n=0){return(lam0*tanh(n*0.005)*exp(-n*1e-7))}
+#lambda = function(n=0){return(lam0*exp(-n*1e-5))}
+
+eps0 = 0.7
+#epsilon = function(n=0){return(eps0)}
+epsilon = function(n=0){return(eps0*700/(700+n))}
+#epsilon = function(n=0){return(eps0*exp(-n*1e-5))}
+
+step_penalty = 1
+
+#####################################
+
+myFunction = function(maze,doRand=T){
+    # passes the controller
+    controller = list(decideAction=decideAction, update=updateController,doRand=doRand)
+    return(controller)
+}
+
+decideAction = function(controller, maze){
+    # called each turn
+    # transition matrix (state1, action, state2)
+    caught_reward = -1000
+    win_reward = 1000
+    
+    if (is.null(controller$qtable)){
+        controller$action_nr = 0
+        controller$episode_nr = 0
+        qtable = matrix(NA,0,7)
+        colnames(qtable) = c("wx","wy","mx","my","action","exutil","visits")
+        for (i in 1:nrow(maze$maze)){
+            adj = getAdjacent(maze$maze,maze$maze[[i,"x"]],maze$maze[[i,"y"]])[,1]
+            for (j in 1:nrow(maze$maze)){
+                for (k in adj){
+                    qtable = rbind(qtable, data.matrix(cbind(maze$maze[i,], maze$maze[j,], k, 0, 0)))
+                }
+            }
+        }
+        
+        colnames(qtable) = c("wx","wy","mx","my","action","exutil","visits")
+        rownames(qtable) = c()
+        qtable[qtable["wx"]==maze$goal[1] & qtable["wy"]==maze$goal[2],"action"] = 0
+        qtable[qtable["wx"]==maze$goal[1] & qtable["wy"]==maze$goal[2],"exutil"] = win_reward
+        qtable[qtable["wx"]==qtable["mx"] & qtable["wy"]==qtable["my"],"action"] = 0
+        qtable[qtable["wx"]==qtable["mx"] & qtable["wy"]==qtable["my"],"exutil"] = caught_reward
+        
+        controller$qtable = unique(qtable)
+    }
+    
+    controller$action_nr = controller$action_nr+1
+    
+    monster = maze$monster1
+    
+    avail_moves = controller$qtable[
+        controller$qtable[,"wx"]==maze$wobbie[1]
+        & controller$qtable[,"wy"]==maze$wobbie[2]
+        & controller$qtable[,"mx"]==monster[1]
+        & controller$qtable[,"my"]==monster[2]
+        ,]
+    
+    if (is.null(dim(avail_moves))){ #only one possible action
+        action = avail_moves["action"]
+    } else if (controller$doRand && runif(1)<=epsilon(controller$episode_nr)){ #random valid move
+        action = sample(c(avail_moves[,"action"]),1)
+    } else { # follow max utility
+        action = avail_moves[which.max(avail_moves[,"exutil"]),"action"]
+    }
+    
+    controller$lastState = c(maze$wobbie,monster)
+    return(list(move=action, control=controller))
+}
+
+updateController = function(controller,maze){
+    # called each turn after decideAction and updating the maze
+    
+    #print(c(controller$lastState,maze$lastAction,maze$reward,maze$wobbie[1],maze$wobbie[2],maze$monster1[1],maze$monster1[2]))
+    #print(c(maze$alive, maze$lastAction ,maze$reward))
+    
+    # c("s0wx","s0wy","s0mx","s0my","action","exutil","s1wx","s1wy","s1mx","s1my")
+    monster = maze$monster1
+    
+    laststep = c(
+        controller$lastState,
+        maze$lastAction,
+        maze$reward,
+        maze$wobbie[1],
+        maze$wobbie[2],
+        monster[1],
+        monster[2]
+      )
+    
+    maxexutil = max(controller$qtable[
+        controller$qtable[,"wx"]==laststep[7] 
+        & controller$qtable[,"wy"]==laststep[8] 
+        & controller$qtable[,"mx"]==laststep[9] 
+        & controller$qtable[,"my"]==laststep[10]
+        ,"exutil"])
+    
+    tmp = controller$qtable[
+        controller$qtable[,"wx"]==laststep[1] 
+        & controller$qtable[,"wy"]==laststep[2] 
+        & controller$qtable[,"mx"]==laststep[3] 
+        & controller$qtable[,"my"]==laststep[4]
+        & controller$qtable[,"action"]==laststep[5]
+        ,"exutil"]
+    
+    visits = controller$qtable[
+        controller$qtable[,"wx"]==laststep[1] 
+        & controller$qtable[,"wy"]==laststep[2] 
+        & controller$qtable[,"mx"]==laststep[3] 
+        & controller$qtable[,"my"]==laststep[4]
+        & controller$qtable[,"action"]==laststep[5]
+        ,"visits"]
+    
+    if (maze$finished || !maze$alive){
+        controller$qtable[
+            controller$qtable[,"wx"]==laststep[1] 
+            & controller$qtable[,"wy"]==laststep[2] 
+            & controller$qtable[,"mx"]==laststep[3] 
+            & controller$qtable[,"my"]==laststep[4]
+            & controller$qtable[,"action"]==laststep[5]
+            ,"exutil"] = tmp - lambda(visits)*(tmp - laststep[6])
+        controller$episode_nr = controller$episode_nr + 1
+      
+    } else {
+        controller$qtable[
+            controller$qtable[,"wx"]==laststep[1] 
+            & controller$qtable[,"wy"]==laststep[2] 
+            & controller$qtable[,"mx"]==laststep[3] 
+            & controller$qtable[,"my"]==laststep[4]
+            & controller$qtable[,"action"]==laststep[5]
+            ,"exutil"] = tmp - lambda(visits)*(tmp - (step_penalty*laststep[6] + gamma(controller$action_nr)*maxexutil))
+      
+    }
+    
+    controller$qtable[
+        controller$qtable[,"wx"]==laststep[1] 
+        & controller$qtable[,"wy"]==laststep[2] 
+        & controller$qtable[,"mx"]==laststep[3] 
+        & controller$qtable[,"my"]==laststep[4]
+        & controller$qtable[,"action"]==laststep[5]
+        ,"visits"] = visits + 1
+    
+#    if ((maze$finished || !maze$alive) && controller$episode_nr%%100==0) print(maze)
+    #print(c(tmp, lambda(visits)*(laststep[6] + gamma(controller$action_nr)*maxexutil)))
+    
+    return(controller)
+}
+
+getAdjacent = function(maze,x,y){
+    #returns matrix with (action, s1_x, s1_y) per row
+    adjacent = matrix(NA,0,3)
+    
+    #adjacent = rbind(adjacent,c(5, x, y)) ###### USE ACTION 5 ??
+    # dir 2
+    if (length(which( maze$x == x & maze$y == y-1)) > 0)
+        adjacent = rbind(adjacent,c(2, x, y-1))
+    
+    # dir 4
+    if (length(which( maze$x == x-1 & maze$y == y)) > 0)
+        adjacent = rbind(adjacent,c(4, x-1, y))
+    
+    # dir 6
+    if (length(which( maze$x == x+1 & maze$y == y)) > 0)
+        adjacent = rbind(adjacent,c(6, x+1, y))
+    
+    # dir 8
+    if (length(which( maze$x == x & maze$y == y+1)) > 0)
+        adjacent = rbind(adjacent,c(8, x, y+1))
+    
+    return(adjacent)
+}
+
+manhattan = function(pos1,pos2){
+    return(abs(pos1[1]-pos2[1])+abs(pos1[2]-pos2[2]))
+}

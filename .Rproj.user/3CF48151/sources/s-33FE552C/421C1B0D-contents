@@ -1,0 +1,158 @@
+myController = function (maze) 
+{
+  EXPLORE = 0.24
+  DISCOUNT = 1.00  # <- not used as set to 1.0
+  ALPHA = 0.03
+  ACTIONS = c(2,4,6,8,5);
+  
+  get_moves = function(maze) {
+    #
+    # Returns a list of valid moves vectors: c(2,4,6,8,5), at each spot in the maze
+    #
+    maze_boolean = matrix(0, 6, 6)
+    for (i in (1:length(maze$maze$x))) {
+      maze_boolean[maze$maze$x[i],maze$maze$y[i]] = 1
+    }
+    # Create a valid list of moves for every wobbie state table from the maze
+    moves_list = vector("list", 36)
+    idx = 1
+    for (i in (1:6)) {
+      for (j in (1:6)) {
+        moves = c()
+        if (j != 1 && maze_boolean[i,j-1] == 1) {
+          moves = c(moves, 2)  # 2 moves down
+        }
+        if (i != 1 && maze_boolean[i-1,j] == 1) {
+          moves = c(moves, 4)  # 4 moves left
+        }
+        if (i != 6 && maze_boolean[i+1,j] == 1) {
+          moves = c(moves, 6)  # 6 moves right
+        }
+        if (j != 6 && maze_boolean[i,j+1] == 1) {
+          moves = c(moves, 8)  # 6 moves up
+        }
+        moves = c(moves, 5)  # 5 stays still
+        moves_list[[idx]] = moves
+        idx = idx + 1
+      }
+    }
+    return(moves_list)
+  }
+  MOVES = get_moves(maze)
+  
+  get_qTable = function() {
+    #
+    # Returns a q_table as a 1296 x 10 matrix. 
+    # Q-table identifies states in the first four cols with (x_wobbie, y_wobbie, x_monster, y_monster)
+    # and the next 5 columns are Q-values associated with moves 2,4,6,8,5 respectively.
+    # the final column is a visted count.
+    # Invalid moves are pre designated a Q-value of -10000.
+    #
+    q_table = matrix(-10000, nrow=6*6*6*6, ncol=10)
+    
+    idx = 1
+    for (i in (1:6)) {
+      for (j in (1:6)) {
+        for (k in (1:6)) {
+          for (m in (1:6)) {
+            q_table[idx, 1] = i
+            q_table[idx, 2] = j
+            q_table[idx, 3] = k
+            q_table[idx, 4] = m
+            
+            # allocate zero initial values to valid moves:
+            if (2 %in% MOVES[[(i-1)*6 + j]]) {
+              q_table[idx, 5] = 0
+            }
+            if (4 %in% MOVES[[(i-1)*6 + j]]) {
+              q_table[idx, 6] = 0
+            }
+            if (6 %in% MOVES[[(i-1)*6 + j]]) {
+              q_table[idx, 7] = 0
+            }
+            if (8 %in% MOVES[[(i-1)*6 + j]]) {
+              q_table[idx, 8] = 0
+            }
+            q_table[idx, 9] = 0
+            q_table[idx, 10] = 0
+            
+            idx = idx + 1
+          }
+        }
+      } 
+    }
+    return(q_table)
+  }
+  q_table = get_qTable()
+  
+  hash_idx = function(S) {
+    #
+    # Returns the idx of the wobbie-monster state in the Q table via an effective hash transformation
+    #
+    return((S[1]-1)*6^3 + (S[2]-1)*6^2 + (S[3]-1)*6 + S[4])
+  }
+  getBest = function(Q, S) {
+    #
+    # Function looks up the best move in the q_table given the wobbie-monster state
+    #
+    # Args:
+    #    Q: the Q-Table of size (27*27, 9)
+    #    S: the state row to look up  of length 4
+    #
+    state_row_idx = hash_idx(S)
+    action_idx = which.max(Q[state_row_idx, 5:9]);
+    return( list(action = action_idx, state = state_row_idx) )
+  }
+
+  q_old = c(0,0,0) # <- (state_idx, action_idx, Q-value)
+  
+  decideAction = function(cont, maze_) {
+    if (cont$doRand) {
+      # then we are learning so can explore..
+      wob_x = maze_$wobbie[1]
+      wob_y = maze_$wobbie[2]
+      
+      sa_idx = getBest(cont$qTable, c(wob_x, wob_y, maze_$monster1[1],maze_$monster1[2]))
+      if (runif(1) < cont$explore) {
+        # choose a random move from the list of available moves at wobbie location
+        action = sample(MOVES[[(wob_x-1)*6 + wob_y]], 1)
+        sa_idx$action = which(ACTIONS == action)
+      } else {
+        action = ACTIONS[sa_idx$action]
+      }
+      cont$qOld = c(sa_idx$state, sa_idx$action, cont$qTable[sa_idx$state, 4 + sa_idx$action])
+    } else {
+      if (cont$doRandFirst) {
+        # this is first performance ran so perform some specific code... this will run each time for each test.
+        # do nothing..
+        cont$doRandFirst = FALSE
+      }
+      # then we are performing so update only with q-table and no learning will be made
+      sa_idx = getBest(cont$qTable, c(maze_$wobbie[1], maze_$wobbie[2], maze_$monster1[1],maze_$monster1[2]))
+      action = ACTIONS[sa_idx$action]
+    }
+    list(move = action, control = cont)
+  }
+  
+  update = function(cont, maze_) {
+    sa_idx = getBest(cont$qTable, c(maze_$wobbie[1], maze_$wobbie[2], maze_$monster1[1],maze_$monster1[2]))
+    state_old = cont$qOld[1]
+    action_old = cont$qOld[2]
+    
+    a = cont$alpha # / (cont$alpha + cont$qTable[state_old, 10])
+    r = maze_$reward
+    max = cont$qTable[sa_idx$state, 4 + sa_idx$action]
+    q_old = cont$qOld[3]
+    
+    cont$qTable[state_old, 4+action_old] = (1-a) * q_old + a * (r + max)
+    cont$qTable[state_old, 10] = cont$qTable[state_old, 10] + 1 # updated visited
+    
+    # cont$qCounter[state_old, 4+action_old] = cont$qCounter[state_old, 4+action_old] + 1
+    
+    return(cont)
+  }
+  
+  list(decideAction = decideAction, update = update, doRand = TRUE, doRandFirst = TRUE,
+       qTable = q_table, qOld = q_old, explore = EXPLORE, alpha = ALPHA)
+}
+return(myController)

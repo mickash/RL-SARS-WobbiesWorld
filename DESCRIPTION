@@ -1,0 +1,11 @@
+Package: WobbiesWorldEval
+Type: Package
+Title: Wobbie's World Evaluations
+Version: 0.1.0
+Author: Mike Ashcroft
+Maintainer: Mike Ashcroft <michael.ashcroft@it.uu.se>
+Description: Evaluates the Wobbie's World project for AI at Uppsala University
+Depends: WobbiesWorld
+License: What license is it under?
+Encoding: UTF-8
+LazyData: true

@@ -1,0 +1,22 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1541533804703.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "0",
+    "id" : "573DF9E8",
+    "lastKnownWriteTime" : 1541530216,
+    "last_content_update" : 1541530216,
+    "path" : "~/Courses/AI/2018/Projects/assignments 5/Group 96/myFuncWW_mx.r",
+    "project_path" : null,
+    "properties" : {
+        "cursorPosition" : "1,8",
+        "scrollLine" : "0"
+    },
+    "relative_order" : 2,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}
